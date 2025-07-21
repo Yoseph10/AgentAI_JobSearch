@@ -24,6 +24,7 @@ CAMPOS_EMPLEO = [
 ]
 
 # ------------ TOOL 1: Buscar empleos -------------
+'''
 @tool
 def buscar_empleos(query: str = "data science", location: str = "PE") -> str:
     """Busca empleos desde la API de JSearch usando RapidAPI y devuelve el número de empleos encontrados."""
@@ -49,6 +50,8 @@ def buscar_empleos(query: str = "data science", location: str = "PE") -> str:
             return f"Error {response.status_code}: No se pudo acceder a la API."
     except Exception as e:
         return f"Excepción al buscar empleos: {str(e)}"
+'''
+
 
 # ------------ TOOL 2: Guardar en MongoDB -------------
 @tool
@@ -99,44 +102,44 @@ def guardar_empleos_mongo(query: str = "data science", location: str = "PE") -> 
 
 # ------------ TOOL 3: Resumir desde MongoDB -------------
 @tool
-def resumen_jobs_mongo(mongo_uri: str) -> str:
-    """Genera un resumen de las ofertas laborales nuevas almacenadas en MongoDB."""
-
+def resumen_puestos_recientes(limite: int = 10) -> str:
+    """
+    Recupera los últimos 'limite' registros de MongoDB y genera un resumen de los puestos de trabajo encontrados.
+    """
     try:
-        client = MongoClient(mongo_uri)
+        client = MongoClient(MONGODB_URI)
         db = client["empleos_ia"]
         collection = db["ofertas"]
 
-        jobs = list(collection.find({"resumido": False}).sort("job_posted_at_datetime_utc", -1).limit(10))
+        # Obtener los últimos N registros insertados
+        jobs = list(collection.find().sort("job_posted_at_datetime_utc", -1).limit(limite))
 
         if not jobs:
-            return "No hay ofertas nuevas para resumir."
+            return "No se encontraron registros recientes en la base de datos."
 
-        texto_jobs = "\n\n".join([
-            f"{job['job_title']} en {job['employer_name']}, {job.get('job_city', 'sin ciudad')} ({job['job_country']})\n{job['job_description'][:300]}..."
-            for job in jobs
+        # Construir texto de entrada con solo título y empresa
+        texto_jobs = "\n".join([
+            f"- {job['job_title']} en {job['employer_name']}" for job in jobs
         ])
 
         model = ChatOpenAI(temperature=0, model="gpt-4o")
+
         from langchain_core.prompts import ChatPromptTemplate
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "Eres un asistente profesional que resume ofertas laborales para un boletín diario."),
-            ("human", "Resume las siguientes ofertas de empleo:\n\n{ofertas}")
+            ("system", "Eres un asistente profesional que analiza el mercado laboral."),
+            ("human", "Con base en esta lista de puestos recientes, genera un resumen breve de las oportunidades de trabajo disponibles:\n\n{puestos}")
         ])
 
         chain = prompt | model
-        resumen = chain.invoke({"ofertas": texto_jobs})
-
-        for job in jobs:
-            collection.update_one({"_id": job["_id"]}, {"$set": {"resumido": True}})
+        resumen = chain.invoke({"puestos": texto_jobs})
 
         return resumen.content
 
     except Exception as e:
-        return f"Error al generar resumen: {str(e)}"
+        return f"Error al generar resumen de puestos: {str(e)}"
 
 # ------------ Agente con memoria -------------
-tolkit = [buscar_empleos, guardar_empleos_mongo, resumen_jobs_mongo]
+toolkit = [guardar_empleos_mongo, resumen_puestos_recientes]
 model = ChatOpenAI(model="gpt-4o")
 
 # Memoria de corto plazo
@@ -156,7 +159,7 @@ Tu tarea es decidir en cada paso si necesitas usar una herramienta para avanzar.
 ])
 
 
-agent_executor = create_react_agent(model, tolkit, checkpointer=memory, prompt=prompt)
+agent_executor = create_react_agent(model, toolkit, checkpointer=memory, prompt=prompt)
 
 
 # ------------ Ejecución ejemplo -------------
@@ -164,7 +167,7 @@ if __name__ == "__main__":
     config = {"configurable": {"thread_id": "empleos_peru_01"}}
 
     for step in agent_executor.stream(
-        {"messages": "Busca empleos en Perú y guardalos en la base de datos."},
+        {"messages": "Busca empleos en Perú y hazme un resumen."},
         config,
         stream_mode="values",
     ):
