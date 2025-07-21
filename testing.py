@@ -5,6 +5,9 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
+EMAIL_FROM = os.getenv("EMAIL_FROM")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_core. prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -14,6 +17,8 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pymongo import MongoClient
+from email.message import EmailMessage
+import smtplib
 import requests
 
 
@@ -24,34 +29,6 @@ CAMPOS_EMPLEO = [
 ]
 
 # ------------ TOOL 1: Buscar empleos -------------
-'''
-@tool
-def buscar_empleos(query: str = "data science", location: str = "PE") -> str:
-    """Busca empleos desde la API de JSearch usando RapidAPI y devuelve el número de empleos encontrados."""
-
-    try:
-        url = "https://jsearch.p.rapidapi.com/search"
-        params = {
-            "query": query,
-            "page": "1",
-            "num_pages": "1",
-            "country": location,
-            "fields": ",".join(CAMPOS_EMPLEO)
-        }
-        headers = {
-            "X-RapidAPI-Key": RAPIDAPI_KEY,
-            "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-        }
-        response = requests.get(url, headers=headers, params=params)
-        if response.status_code == 200:
-            jobs = response.json().get("data", [])
-            return f"Se encontraron {len(jobs)} empleos."
-        else:
-            return f"Error {response.status_code}: No se pudo acceder a la API."
-    except Exception as e:
-        return f"Excepción al buscar empleos: {str(e)}"
-'''
-
 
 # ------------ TOOL 2: Guardar en MongoDB -------------
 @tool
@@ -138,8 +115,44 @@ def resumen_puestos_recientes(limite: int = 10) -> str:
     except Exception as e:
         return f"Error al generar resumen de puestos: {str(e)}"
 
+
+@tool
+def enviar_resumen_email(destinatario: str = "") -> str:
+    """
+    Recupera los últimos puestos desde MongoDB, genera un resumen y lo envía por email.
+    Si no se proporciona un correo, solicita al usuario que indique uno.
+    """
+    try:
+        if not destinatario.strip():
+            return "¿A qué correo electrónico deseas que te envíe el resumen?"
+
+        resumen = resumen_puestos_recientes.invoke({"limite": 10})
+        if not resumen or "Error" in resumen:
+            return "No se pudo generar el resumen para enviar por correo."
+
+        remitente = EMAIL_FROM
+        clave_app = EMAIL_PASSWORD
+
+        msg = EmailMessage()
+        msg["Subject"] = "Resumen de empleos recientes en Ciencia de Datos"
+        msg["From"] = remitente
+        msg["To"] = destinatario
+        msg.set_content(resumen)
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as smtp:
+            smtp.starttls()
+            smtp.login(remitente, clave_app)
+            smtp.send_message(msg)
+
+        return f"Resumen enviado correctamente a {destinatario}."
+
+    except Exception as e:
+        return f"Error al enviar correo: {str(e)}"
+
+
+
 # ------------ Agente con memoria -------------
-toolkit = [guardar_empleos_mongo, resumen_puestos_recientes]
+toolkit = [guardar_empleos_mongo, resumen_puestos_recientes, enviar_resumen_email]
 model = ChatOpenAI(model="gpt-4o")
 
 # Memoria de corto plazo
@@ -167,7 +180,7 @@ if __name__ == "__main__":
     config = {"configurable": {"thread_id": "empleos_peru_01"}}
 
     for step in agent_executor.stream(
-        {"messages": "Busca empleos en Perú y hazme un resumen."},
+        {"messages": "Mándame el resumen de los trabajos recientes por correo a yosephayala4455@gmail.com"},
         config,
         stream_mode="values",
     ):
