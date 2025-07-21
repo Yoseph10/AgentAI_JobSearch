@@ -29,6 +29,23 @@ CAMPOS_EMPLEO = [
 ]
 
 # ------------ TOOL 1: Buscar empleos -------------
+@tool
+def buscar_empleos(query: str = "data science", location: str = "PE") -> str:
+    """Busca empleos y muestra los títulos sin guardarlos en MongoDB."""
+    url = "https://jsearch.p.rapidapi.com/search"
+    headers = {
+        "X-RapidAPI-Key": RAPIDAPI_KEY,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
+    }
+    params = {"query": query, "page": "1", "num_pages": "1", "country": location}
+
+    response = requests.get(url, headers=headers, params=params)
+    if response.status_code != 200:
+        return f"Error al buscar empleos: {response.status_code}"
+
+    empleos = response.json().get("data", [])
+    return "\n".join([f"- {e['job_title']} en {e['employer_name']}" for e in empleos]) or "No se encontraron empleos."
+
 
 # ------------ TOOL 2: Guardar en MongoDB -------------
 @tool
@@ -115,6 +132,7 @@ def resumen_puestos_recientes(limite: int = 10) -> str:
     except Exception as e:
         return f"Error al generar resumen de puestos: {str(e)}"
 
+# ------------ TOOL 4: Enviar resumen por correo  -------------
 
 @tool
 def enviar_resumen_email(destinatario: str = "") -> str:
@@ -152,7 +170,7 @@ def enviar_resumen_email(destinatario: str = "") -> str:
 
 
 # ------------ Agente con memoria -------------
-toolkit = [guardar_empleos_mongo, resumen_puestos_recientes, enviar_resumen_email]
+toolkit = [buscar_empleos, guardar_empleos_mongo, resumen_puestos_recientes, enviar_resumen_email]
 model = ChatOpenAI(model="gpt-4o")
 
 # Memoria de corto plazo
@@ -176,12 +194,37 @@ agent_executor = create_react_agent(model, toolkit, checkpointer=memory, prompt=
 
 
 # ------------ Ejecución ejemplo -------------
-if __name__ == "__main__":
+
+def main():
+    print("🤖 Bienvenido al asistente de empleos en Ciencia de Datos.")
+    print("Escribe 'salir' para terminar la conversación.\n")
+
     config = {"configurable": {"thread_id": "empleos_peru_01"}}
 
-    for step in agent_executor.stream(
-        {"messages": "Mándame el resumen de los trabajos recientes por correo a yosephayala4455@gmail.com"},
-        config,
-        stream_mode="values",
-    ):
-        step["messages"][-1].pretty_print()
+    while True:
+        entrada = input("Tú: ")
+
+        if entrada.lower() in ["salir", "exit"]:
+            print("Asistente: ¡Hasta pronto! 👋")
+            break
+
+        if not entrada.strip():
+            print("Asistente: Por favor, escribe algo.")
+            continue
+
+        # Flujo del agente con memoria
+        try:
+            for paso in agent_executor.stream(
+                {"messages": entrada},
+                config,
+                stream_mode="values"
+            ):
+                respuesta = paso["messages"][-1].content
+                if respuesta:
+                    print(f"Asistente: {respuesta}")
+        except Exception as e:
+            print(f"Asistente: Ocurrió un error: {e}")
+
+
+if __name__ == "__main__":
+    main()
