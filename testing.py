@@ -98,34 +98,59 @@ def guardar_empleos_mongo(query: str = "data science", location: str = "PE") -> 
 @tool
 def resumen_puestos_recientes(limite: int = 10) -> str:
     """
-    Recupera los últimos 'limite' registros de MongoDB y genera un resumen de los puestos de trabajo encontrados.
+    Recupera los últimos 'limite' registros de MongoDB y genera un resumen estructurado de cada oferta:
+    - Puesto
+    - Link de aplicación
+    - Breve resumen de descripción
+    - Nivel de experiencia
+    - Fecha de publicación
     """
     try:
         client = MongoClient(MONGODB_URI)
         db = client["empleos_ia"]
         collection = db["ofertas"]
 
-        # Obtener los últimos N registros insertados
-        jobs = list(collection.find().sort("job_posted_at_datetime_utc", -1).limit(limite))
+        # Obtener los últimos N registros ordenados por _id de inserción (si no hay fecha)
+        jobs = list(collection.find().sort("_id", -1).limit(limite))
 
         if not jobs:
             return "No se encontraron registros recientes en la base de datos."
 
-        # Construir texto de entrada con solo título y empresa
-        texto_jobs = "\n".join([
-            f"- {job['job_title']} en {job['employer_name']}" for job in jobs
-        ])
+        # Preparar el texto para enviar al modelo
+        items = []
+        for job in jobs:
+            descripcion_corta = job.get("job_description", "")[:600].replace("\n", " ").strip()
+            fecha = job.get("job_posted_at_datetime_utc") or "No especificada"
+            texto = f"""\
+            Puesto: {job.get('job_title', 'N/A')}
+            Empresa: {job.get('employer_name', 'N/A')}
+            Link: {job.get('job_apply_link', 'N/A')}
+            Fecha de publicación: {fecha}
+            Descripción del puesto:
+            {descripcion_corta}
+    """
+            items.append(texto)
 
-        model = ChatOpenAI(temperature=0, model="gpt-4o")
+        bloque_puestos = "\n---\n".join(items)
 
-        from langchain_core.prompts import ChatPromptTemplate
+        # PROMPT nuevo más detallado
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "Eres un asistente profesional que analiza el mercado laboral."),
-            ("human", "Con base en esta lista de puestos recientes, genera un resumen breve de las oportunidades de trabajo disponibles:\n\n{puestos}")
+            ("system", "Eres un analista laboral experto en tecnología. Recibiste una lista de nuevas oportunidades laborales."),
+            ("human",
+             "Resume la siguiente lista de ofertas de empleo de forma estructurada.\n"
+             "Para cada oferta, proporciona un resumen claro con los siguientes elementos:\n"
+             "- Título del puesto\n"
+             "- Empresa\n"
+             "- Enlace de aplicación\n"
+             "- Requisitos clave o experiencia solicitada\n"
+             "- Breve descripción del rol\n"
+             "- Fecha de publicación (si está disponible)\n\n"
+             "Ofertas:\n{puestos}")
         ])
 
+        model = ChatOpenAI(temperature=0.3, model="gpt-4o")
         chain = prompt | model
-        resumen = chain.invoke({"puestos": texto_jobs})
+        resumen = chain.invoke({"puestos": bloque_puestos})
 
         return resumen.content
 
