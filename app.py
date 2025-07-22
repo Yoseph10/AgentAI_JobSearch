@@ -200,29 +200,34 @@ def enviar_resumen_email(destinatario: str = "") -> str:
 
 # ------------ Agente con memoria -------------
 toolkit = [buscar_empleos, guardar_empleos_mongo, resumen_puestos_recientes, enviar_resumen_email]
-model = ChatOpenAI(model="gpt-4o")
+model = ChatOpenAI(model="gpt-4o", temperature=0.3)
 
-# Memoria de corto plazo
-#memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-memory = MemorySaver()
+# --- MODIFICACIÓN CLAVE PARA LA MEMORIA EN STREAMLIT ---
+# Almacena MemorySaver en st.session_state para que persista a través de recargas.
+if "memory_saver" not in st.session_state:
+    st.session_state["memory_saver"] = MemorySaver()
 
+# Usa la instancia de MemorySaver almacenada en session_state
+memory = st.session_state["memory_saver"]
 
+# El prompt como lo definimos en la última corrección, sin 'chat_history' o 'input' explícitos.
 prompt = ChatPromptTemplate.from_messages([
     ("system",
         """Eres un agente experto en gestión de ofertas de empleo relacionadas con Ciencia de Datos en Perú.
 Puedes usar herramientas para buscar empleos en una API, guardar resultados en MongoDB y generar resúmenes.
+
+Las respuestas deben ser claras y concisas, pero amables y empáticas.
 
 Tu tarea es decidir en cada paso si necesitas usar una herramienta para avanzar.
 
 Si el usuario solicita ver empleos que no sea de Ciencia de Datos, comenta que no es tu especialidad y sugiere buscar en otra parte.
 """
     ),
-    ("human", "{messages}"),
+    MessagesPlaceholder("messages"), # Aquí es donde create_react_agent inyecta los mensajes, incluyendo el historial.
 ])
 
 
 agent_executor = create_react_agent(model, toolkit, checkpointer=memory, prompt=prompt)
-#agent = agent_executor.with_config({"configurable": {"thread_id": "streamlit_empleos"}})
 
 
 # ---------- Interfaz Streamlit ----------
@@ -248,23 +253,27 @@ if user_input:
     with st.chat_message("assistant"):
         output = ""
         try:
+            # Puedes usar un thread_id fijo para una sola sesión de usuario o generar uno dinámico
+            # Para una app de un solo usuario, "streamlit_empleos" está bien.
+            # Para múltiples usuarios, considera algo como f"streamlit_empleos_{st.session_state.session_id}"
             config = {"configurable": {"thread_id": "streamlit_empleos"}}
 
-            # Recopilar todos los mensajes del stream
             all_messages = []
+            # Pasamos HumanMessage(content=user_input) a 'messages'
+            # create_react_agent y MemorySaver se encargarán del historial automáticamente.
             for paso in agent_executor.stream({"messages": [HumanMessage(content=user_input)]}, config, stream_mode="values"):
                 all_messages.extend(paso["messages"])
 
-            # Mostrar el contenido del último mensaje (la respuesta final del asistente)
             if all_messages:
+                # El último mensaje de 'all_messages' contendrá la respuesta final del asistente.
                 final_assistant_message = all_messages[-1].content
                 st.markdown(final_assistant_message)
-                output = final_assistant_message # Almacenar solo la respuesta final
+                output = final_assistant_message
             else:
                 st.markdown("No se generó ninguna respuesta.")
 
         except Exception as e:
             st.error(f"Error: {e}")
-            output = f"Error: {e}" # Asegurarse de que el output se guarde en el historial
+            output = f"Error: {e}"
 
     st.session_state["history"].append({"role": "assistant", "content": output})
